@@ -18,7 +18,7 @@ if ($action === 'add') {
     redirect('/referral_doctors.php');
   }
   db_exec(
-    "INSERT INTO referral_doctors(doctor_name, is_active, created_at, updated_at) VALUES(?,?,?,?)",
+    "INSERT INTO referral_doctors(name, is_active, created_at, updated_at) VALUES(?,?,?,?)",
     [$name, 1, now_dt(), null]
   );
   flash_set('ok','Dokter perujuk ditambahkan.');
@@ -42,14 +42,14 @@ if ($action === 'rename') {
     flash_set('err','Data tidak valid.');
     redirect('/referral_doctors.php');
   }
-  db_exec("UPDATE referral_doctors SET doctor_name=?, updated_at=? WHERE id=?", [$name, now_dt(), $id]);
+  db_exec("UPDATE referral_doctors SET name=?, updated_at=? WHERE id=?", [$name, now_dt(), $id]);
   flash_set('ok','Nama dokter perujuk diperbarui.');
   redirect('/referral_doctors.php');
 }
 
 $rows = [];
 try {
-  $rows = db()->query("SELECT id, doctor_name, is_active, created_at, updated_at FROM referral_doctors ORDER BY doctor_name ASC")->fetchAll();
+  $rows = db()->query("SELECT id, name AS doctor_name, is_active, created_at, updated_at FROM referral_doctors ORDER BY name ASC")->fetchAll();
 } catch (Throwable $e) {
   $rows = [];
 }
