@@ -12,7 +12,7 @@ csrf_validate();
 // Master Dokter Perujuk (opsional)
 $refDocs = [];
 try {
-  $refDocs = db()->query("SELECT id, doctor_name FROM referral_doctors WHERE is_active=1 ORDER BY doctor_name ASC")->fetchAll();
+  $refDocs = db()->query("SELECT id, name AS doctor_name FROM referral_doctors WHERE is_active=1 ORDER BY name ASC")->fetchAll();
 } catch (Throwable $e) {
   $refDocs = [];
 }

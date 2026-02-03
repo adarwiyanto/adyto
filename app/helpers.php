@@ -39,14 +39,20 @@ function ensure_dirs(): void {
     $parts = explode('.', $k);
     $v = $cfg;
     foreach ($parts as $p) $v = $v[$p] ?? null;
-    if ($v && !is_dir($v)) @mkdir($v, 0775, true);
+    if ($v && !is_dir($v)) {
+      if (file_exists($v)) continue;
+      @mkdir($v, 0775, true);
+    }
   }
 }
 
 function log_app(string $level, string $message, array $context = []): void {
   $cfg = config();
   $dir = $cfg['paths']['logs'] ?? (__DIR__ . '/../storage/logs');
-  if (!is_dir($dir)) @mkdir($dir, 0775, true);
+  if (!is_dir($dir)) {
+    if (file_exists($dir)) return;
+    @mkdir($dir, 0775, true);
+  }
   $file = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . 'app-' . date('Y-m-d') . '.log';
   $line = sprintf(
     "[%s] %-5s %s %s\n",
