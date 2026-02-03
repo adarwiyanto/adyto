@@ -1,0 +1,12 @@
+[2026-02-03 10:29:11] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:29:11] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}
+[2026-02-03 10:29:49] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:29:49] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}
+[2026-02-03 10:32:07] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:32:07] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}
+[2026-02-03 10:32:27] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:32:27] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}
+[2026-02-03 10:33:08] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:33:08] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}
+[2026-02-03 10:33:16] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-03 10:33:16] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'doctor_name' in 'INSERT INTO'","file":"/home/adey8293/public_html/ams/app/db.php","line":29}

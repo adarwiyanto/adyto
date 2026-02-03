@@ -1,0 +1,4 @@
+[2026-01-22 06:06:30] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-01-22 06:06:30] ERROR DB connection failed {"err":"SQLSTATE[HY000] [1045] Access denied for user 'root'@'localhost' (using password: NO)"}
+[2026-01-22 06:06:30] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-01-22 06:06:30] ERROR Uncaught exception {"message":"SQLSTATE[HY000] [1045] Access denied for user 'root'@'localhost' (using password: NO)","file":"/home/adey8293/public_html/ams/app/db.php","line":20}

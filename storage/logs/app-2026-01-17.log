@@ -1,0 +1,3 @@
+[2026-01-17 06:04:11] ERROR Uncaught exception {"message":"Call to undefined function dob_to_ddmmyyyy()","file":"C:\\xampp\\htdocs\\AMS\\patient_card_pdf.php","line":208}
+[2026-01-17 06:04:18] ERROR Uncaught exception {"message":"Call to undefined function dob_to_ddmmyyyy()","file":"C:\\xampp\\htdocs\\AMS\\patient_card_pdf.php","line":208}
+[2026-01-17 06:04:35] ERROR Uncaught exception {"message":"Call to undefined function dob_to_ddmmyyyy()","file":"C:\\xampp\\htdocs\\AMS\\patient_card_pdf.php","line":208}

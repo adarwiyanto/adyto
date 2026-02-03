@@ -1,0 +1,1096 @@
+diff -ruN app/public_documents.php app/public_documents.php
+--- app/public_documents.php	1970-01-01 00:00:00.000000000 +0000
++++ app/public_documents.php	2026-01-24 04:28:53.024699455 +0000
+@@ -0,0 +1,85 @@
++<?php
++require_once __DIR__ . '/helpers.php';
++require_once __DIR__ . '/db.php';
++require_once __DIR__ . '/controllers/common.php';
++
++/**
++ * Build absolute URL (scheme + host) for QR/verification links.
++ * Falls back gracefully if executed from CLI.
++ */
++function absolute_url(string $path = ''): string {
++  $path = '/' . ltrim($path, '/');
++  $bp = base_path();
++  $fullPath = $bp . $path;
++
++  $host = $_SERVER['HTTP_HOST'] ?? '';
++  if ($host === '') return $fullPath;
++
++  $scheme = 'http';
++  if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') $scheme = 'https';
++  // behind proxy
++  $xfp = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
++  if ($xfp) $scheme = explode(',', $xfp)[0];
++
++  return $scheme . '://' . $host . $fullPath;
++}
++
++function public_document_get_or_create(string $docType, int $docId, string $docNo = ''): array {
++  $docType = trim($docType);
++  $docNo = trim($docNo);
++
++  $st = db()->prepare("SELECT * FROM public_documents WHERE doc_type=? AND doc_id=? LIMIT 1");
++  $st->execute([$docType, $docId]);
++  $row = $st->fetch();
++  if ($row) return $row;
++
++  $token = bin2hex(random_bytes(16));
++  $now = now_dt();
++
++  $ins = db()->prepare("INSERT INTO public_documents(token, doc_type, doc_id, doc_no, created_at, revoked, revoked_at, note)
++                        VALUES(?,?,?,?,?,0,NULL,NULL)");
++  $ins->execute([$token, $docType, $docId, $docNo ?: null, $now]);
++
++  $st2 = db()->prepare("SELECT * FROM public_documents WHERE doc_type=? AND doc_id=? LIMIT 1");
++  $st2->execute([$docType, $docId]);
++  return $st2->fetch() ?: ['token'=>$token,'doc_type'=>$docType,'doc_id'=>$docId,'doc_no'=>$docNo,'created_at'=>$now,'revoked'=>0];
++}
++
++function public_document_verify_url(string $token): string {
++  return absolute_url('/verify.php?token=' . urlencode($token));
++}
++
++/**
++ * QR image URL builder. Provider can be configured in settings:
++ * - qr_provider: 'qrserver' (default) or 'quickchart'
++ * - qr_size: integer (default 180)
++ */
++function public_document_qr_image_url(string $text, array $settings): string {
++  $provider = strtolower(trim((string)($settings['qr_provider'] ?? 'qrserver')));
++  $size = (int)($settings['qr_size'] ?? 180);
++  if ($size <= 60) $size = 180;
++  if ($size > 600) $size = 600;
++
++  if ($provider === 'quickchart') {
++    // https://quickchart.io/documentation/qr-codes/
++    return 'https://quickchart.io/qr?size=' . $size . '&text=' . urlencode($text);
++  }
++
++  // Default: QRServer API (goqr.me)
++  // https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=Example
++  return 'https://api.qrserver.com/v1/create-qr-code/?size=' . $size . 'x' . $size . '&data=' . urlencode($text);
++}
++
++function public_document_log_access(int $publicDocId): void {
++  try {
++    $ip = $_SERVER['REMOTE_ADDR'] ?? null;
++    $ua = $_SERVER['HTTP_USER_AGENT'] ?? null;
++    $ua = $ua ? substr($ua, 0, 255) : null;
++    db_exec("INSERT INTO public_document_access_logs(public_document_id, accessed_at, ip, user_agent) VALUES(?,?,?,?)",
++      [$publicDocId, now_dt(), $ip, $ua]
++    );
++  } catch (Throwable $e) {
++    // don't break verification page
++    log_app('error', 'public_document_log_access failed', ['err'=>$e->getMessage()]);
++  }
++}
+diff -ruN migrations/007_add_public_document_qr_verify.sql migrations/007_add_public_document_qr_verify.sql
+--- migrations/007_add_public_document_qr_verify.sql	1970-01-01 00:00:00.000000000 +0000
++++ migrations/007_add_public_document_qr_verify.sql	2026-01-24 04:28:29.689245422 +0000
+@@ -0,0 +1,39 @@
++-- AMS Migration 007: Public Verify Link + QR + Access Tracking
++-- Aman untuk data lama: hanya menambah tabel & key settings baru. Data lama dibiarkan.
++
++START TRANSACTION;
++
++-- 1) Token untuk dokumen publik
++CREATE TABLE IF NOT EXISTS public_documents (
++  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
++  token CHAR(32) NOT NULL,
++  doc_type VARCHAR(40) NOT NULL,
++  doc_id BIGINT NOT NULL,
++  doc_no VARCHAR(40) DEFAULT NULL,
++  created_at DATETIME NOT NULL,
++  revoked TINYINT(1) NOT NULL DEFAULT 0,
++  revoked_at DATETIME DEFAULT NULL,
++  note VARCHAR(255) DEFAULT NULL,
++  UNIQUE KEY uq_public_documents_token (token),
++  UNIQUE KEY uq_public_documents_doc (doc_type, doc_id),
++  INDEX idx_public_documents_doc_type (doc_type),
++  INDEX idx_public_documents_revoked (revoked)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
++
++-- 2) Log akses (tracking) untuk verifikasi
++CREATE TABLE IF NOT EXISTS public_document_access_logs (
++  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
++  public_document_id BIGINT NOT NULL,
++  accessed_at DATETIME NOT NULL,
++  ip VARCHAR(80) DEFAULT NULL,
++  user_agent VARCHAR(255) DEFAULT NULL,
++  INDEX idx_pd_access_doc (public_document_id),
++  INDEX idx_pd_access_time (accessed_at)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
++
++-- 3) Setting QR provider (opsional) - safe insert
++INSERT IGNORE INTO settings(`key`,`value`) VALUES
++  ('qr_provider', 'qrserver'),
++  ('qr_size', '180');
++
++COMMIT;
+diff -ruN print_consent.php print_consent.php
+--- print_consent.php	2026-01-22 07:44:26.000000000 +0000
++++ print_consent.php	2026-01-24 04:30:17.954121443 +0000
+@@ -1,130 +1,136 @@
+-<?php
+-require_once __DIR__ . '/app/bootstrap.php';
+-require_once __DIR__ . '/app/auth.php';
+-require_once __DIR__ . '/app/db.php';
+-require_once __DIR__ . '/app/controllers/common.php';
+-
+-auth_require();
+-$u = auth_user();
+-$settings = get_settings();
+-
+-$id = (int)($_GET['id'] ?? 0);
+-$st = db()->prepare("SELECT c.*, v.visit_no, v.visit_date,
+-                            p.mrn, p.full_name, p.dob, p.gender, p.address,
+-                            u.full_name AS doctor_name, u.signature_path AS doctor_signature_path
+-                     FROM consents c
+-                     JOIN visits v ON v.id=c.visit_id
+-                     JOIN patients p ON p.id=c.patient_id
+-                     LEFT JOIN users u ON u.id=c.doctor_id
+-                     WHERE c.id=?");
+-$st->execute([$id]);
+-$c = $st->fetch();
+-if (!$c) { http_response_code(404); echo "Not found"; exit; }
+-
+-$clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Praktek dr. Agus');
+-$clinicAddr = $settings['clinic_address'] ?? '';
+-$clinicSip  = $settings['clinic_sip'] ?? '';
+-$logo = $settings['logo_path'] ?? '';
+-
+-$sig_global = $settings['signature_path'] ?? '';
+-$sig_doctor = $c['doctor_signature_path'] ?? '';
+-$sig_patient = $c['signature_path'] ?? '';
+-$sig_doc = $sig_doctor ?: $sig_global;
+-
+-$age = age_from_dob($c['dob']);
+-$signerName = $c['signer_name'] ?: ($c['full_name'] ?? '');
+-?>
+-<!doctype html>
+-<html lang="id">
+-<head>
+-  <meta charset="utf-8">
+-  <meta name="viewport" content="width=device-width, initial-scale=1">
+-  <title>Informed Consent - <?= e($c['consent_no']) ?></title>
+-  <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
+-  <style>
+-    body{background:#fff;color:#000}
+-    .paper{max-width:820px;margin:0 auto;padding:20px}
+-    .kop{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:12px}
+-    .kop img{width:64px;height:64px;object-fit:contain}
+-    .kop .t1{font-size:18px;font-weight:800}
+-    .kop .t2{font-size:12px;color:#333}
+-    .label2{font-size:12px;color:#333;font-weight:700;margin:10px 0 4px}
+-    pre{white-space:pre-wrap;font-family:inherit;margin:0}
+-    .sign-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}
+-    .signbox{text-align:center}
+-    .signbox img{width:180px;height:auto}
+-  </style>
+-</head>
+-<body onload="window.print()">
+-  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/consents.php')) ?>')" aria-label="Kembali">←</button>
+-  <div class="paper">
+-    <div class="kop">
+-      <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
+-      <div>
+-        <div class="t1"><?= e($clinicName) ?></div>
+-        <?php if ($clinicAddr): ?><div class="t2"><?= e($clinicAddr) ?></div><?php endif; ?>
+-        <?php if ($clinicSip): ?><div class="t2">SIP: <?= e($clinicSip) ?></div><?php endif; ?>
+-      </div>
+-    </div>
+-
+-    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+-      <div>Consent No: <b><?= e($c['consent_no']) ?></b></div>
+-      <div>Tanggal: <?= e($c['created_at']) ?></div>
+-    </div>
+-
+-    <div class="label2">Identitas Pasien</div>
+-    <div>MRN: <?= e($c['mrn']) ?> | Nama: <?= e($c['full_name']) ?> | Usia: <?= e((string)($age ?? '-')) ?> | JK: <?= e($c['gender']) ?></div>
+-    <div>Alamat: <?= e($c['address'] ?? '') ?></div>
+-    <div>No Kunjungan: <?= e($c['visit_no']) ?> | Tanggal Kunjungan: <?= e($c['visit_date']) ?></div>
+-
+-    <div class="label2">Tindakan</div>
+-    <div><?= e($c['procedure_name']) ?></div>
+-
+-    <?php if (!empty($c['diagnosis'])): ?>
+-      <div class="label2">Diagnosa</div>
+-      <pre><?= e($c['diagnosis']) ?></pre>
+-    <?php endif; ?>
+-
+-    <?php if (!empty($c['risks'])): ?>
+-      <div class="label2">Risiko</div>
+-      <pre><?= e($c['risks']) ?></pre>
+-    <?php endif; ?>
+-
+-    <?php if (!empty($c['benefits'])): ?>
+-      <div class="label2">Manfaat</div>
+-      <pre><?= e($c['benefits']) ?></pre>
+-    <?php endif; ?>
+-
+-    <?php if (!empty($c['alternatives'])): ?>
+-      <div class="label2">Alternatif</div>
+-      <pre><?= e($c['alternatives']) ?></pre>
+-    <?php endif; ?>
+-
+-    <?php if (!empty($c['notes'])): ?>
+-      <div class="label2">Catatan</div>
+-      <pre><?= e($c['notes']) ?></pre>
+-    <?php endif; ?>
+-
+-    <div class="label2">Pernyataan</div>
+-    <div>Saya menyatakan telah menerima penjelasan mengenai tindakan di atas, memahami manfaat, risiko, serta alternatif, dan menyetujui tindakan dilakukan.</div>
+-
+-    <div class="sign-grid">
+-      <div class="signbox">
+-        <div class="label2">Pasien/Keluarga</div>
+-        <?php if ($sig_patient): ?><img src="<?= e(url($sig_patient)) ?>" alt="Tanda tangan pasien"><?php endif; ?>
+-        <div style="margin-top:6px"><?= e($signerName) ?></div>
+-        <?php if (!empty($c['signer_relation'])): ?>
+-          <div style="font-size:12px;color:#333"><?= e($c['signer_relation']) ?></div>
+-        <?php endif; ?>
+-      </div>
+-      <div class="signbox">
+-        <div class="label2">Dokter</div>
+-        <?php if ($sig_doc): ?><img src="<?= e(url($sig_doc)) ?>" alt="Tanda tangan dokter"><?php endif; ?>
+-        <div style="margin-top:6px"><?= e($c['doctor_name'] ?? $u['full_name']) ?></div>
+-      </div>
+-    </div>
+-  </div>
+-
+-    <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
+-</body>
+-</html>
++<?php
++require_once __DIR__ . '/app/bootstrap.php';
++require_once __DIR__ . '/app/auth.php';
++require_once __DIR__ . '/app/db.php';
++require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
++
++auth_require();
++$u = auth_user();
++$settings = get_settings();
++
++$id = (int)($_GET['id'] ?? 0);
++$st = db()->prepare("SELECT c.*, v.visit_no, v.visit_date,
++                            p.mrn, p.full_name, p.dob, p.gender, p.address,
++                            u.full_name AS doctor_name, u.signature_path AS doctor_signature_path
++                     FROM consents c
++                     JOIN visits v ON v.id=c.visit_id
++                     JOIN patients p ON p.id=c.patient_id
++                     LEFT JOIN users u ON u.id=c.doctor_id
++                     WHERE c.id=?");
++$st->execute([$id]);
++$c = $st->fetch();
++if (!$c) { http_response_code(404); echo "Not found"; exit; }
++
++
++// Public verification token + QR
++$pd = public_document_get_or_create('consent', (int)$c['id'], (string)$c['consent_no']);
++$verifyUrl = public_document_verify_url((string)$pd['token']);
++$qrImg = public_document_qr_image_url($verifyUrl, $settings);
++$clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Praktek dr. Agus');
++$clinicAddr = $settings['clinic_address'] ?? '';
++$clinicSip  = $settings['clinic_sip'] ?? '';
++$logo = $settings['logo_path'] ?? '';
++
++$sig_global = $settings['signature_path'] ?? '';
++$sig_doctor = $c['doctor_signature_path'] ?? '';
++$sig_patient = $c['signature_path'] ?? '';
++$sig_doc = $sig_doctor ?: $sig_global;
++
++$age = age_from_dob($c['dob']);
++$signerName = $c['signer_name'] ?: ($c['full_name'] ?? '');
++?>
++<!doctype html>
++<html lang="id">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>Informed Consent - <?= e($c['consent_no']) ?></title>
++  <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
++  <style>
++    body{background:#fff;color:#000}
++    .paper{max-width:820px;margin:0 auto;padding:20px}
++    .kop{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:12px}
++    .kop img{width:64px;height:64px;object-fit:contain}
++    .kop .t1{font-size:18px;font-weight:800}
++    .kop .t2{font-size:12px;color:#333}
++    .label2{font-size:12px;color:#333;font-weight:700;margin:10px 0 4px}
++    pre{white-space:pre-wrap;font-family:inherit;margin:0}
++    .sign-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}
++    .signbox{text-align:center}
++    .signbox img{width:180px;height:auto}
++  </style>
++</head>
++<body onload="window.print()">
++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/consents.php')) ?>')" aria-label="Kembali">←</button>
++  <div class="paper">
++    <div class="kop">
++      <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++      <div>
++        <div class="t1"><?= e($clinicName) ?></div>
++        <?php if ($clinicAddr): ?><div class="t2"><?= e($clinicAddr) ?></div><?php endif; ?>
++        <?php if ($clinicSip): ?><div class="t2">SIP: <?= e($clinicSip) ?></div><?php endif; ?>
++      </div>
++    </div>
++
++    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
++      <div>Consent No: <b><?= e($c['consent_no']) ?></b></div>
++      <div>Tanggal: <?= e($c['created_at']) ?></div>
++    </div>
++
++    <div class="label2">Identitas Pasien</div>
++    <div>MRN: <?= e($c['mrn']) ?> | Nama: <?= e($c['full_name']) ?> | Usia: <?= e((string)($age ?? '-')) ?> | JK: <?= e($c['gender']) ?></div>
++    <div>Alamat: <?= e($c['address'] ?? '') ?></div>
++    <div>No Kunjungan: <?= e($c['visit_no']) ?> | Tanggal Kunjungan: <?= e($c['visit_date']) ?></div>
++
++    <div class="label2">Tindakan</div>
++    <div><?= e($c['procedure_name']) ?></div>
++
++    <?php if (!empty($c['diagnosis'])): ?>
++      <div class="label2">Diagnosa</div>
++      <pre><?= e($c['diagnosis']) ?></pre>
++    <?php endif; ?>
++
++    <?php if (!empty($c['risks'])): ?>
++      <div class="label2">Risiko</div>
++      <pre><?= e($c['risks']) ?></pre>
++    <?php endif; ?>
++
++    <?php if (!empty($c['benefits'])): ?>
++      <div class="label2">Manfaat</div>
++      <pre><?= e($c['benefits']) ?></pre>
++    <?php endif; ?>
++
++    <?php if (!empty($c['alternatives'])): ?>
++      <div class="label2">Alternatif</div>
++      <pre><?= e($c['alternatives']) ?></pre>
++    <?php endif; ?>
++
++    <?php if (!empty($c['notes'])): ?>
++      <div class="label2">Catatan</div>
++      <pre><?= e($c['notes']) ?></pre>
++    <?php endif; ?>
++
++    <div class="label2">Pernyataan</div>
++    <div>Saya menyatakan telah menerima penjelasan mengenai tindakan di atas, memahami manfaat, risiko, serta alternatif, dan menyetujui tindakan dilakukan.</div>
++
++    <div class="sign-grid">
++      <div class="signbox">
++        <div class="label2">Pasien/Keluarga</div>
++        <?php if ($sig_patient): ?><img src="<?= e(url($sig_patient)) ?>" alt="Tanda tangan pasien"><?php endif; ?>
++        <div style="margin-top:6px"><?= e($signerName) ?></div>
++        <?php if (!empty($c['signer_relation'])): ?>
++          <div style="font-size:12px;color:#333"><?= e($c['signer_relation']) ?></div>
++        <?php endif; ?>
++      </div>
++      <div class="signbox">
++        <div class="label2">Dokter</div>
++        <?php if ($sig_doc): ?><img src="<?= e(url($sig_doc)) ?>" alt="Tanda tangan dokter"><?php endif; ?>
++        <div style="margin-top:6px"><?= e($c['doctor_name'] ?? $u['full_name']) ?></div>
++      </div>
++    </div>
++  </div>
++
++    <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++</body>
++</html>
+diff -ruN print_referral.php print_referral.php
+--- print_referral.php	2026-01-15 15:05:50.000000000 +0000
++++ print_referral.php	2026-01-24 04:30:17.952225962 +0000
+@@ -3,6 +3,7 @@
+ require_once __DIR__ . '/app/auth.php';
+ require_once __DIR__ . '/app/db.php';
+ require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
+ 
+ auth_require();
+ $u = auth_user();
+@@ -21,6 +22,11 @@
+ $r = $st->fetch();
+ if (!$r) { http_response_code(404); echo "Not found"; exit; }
+ 
++
++// Public verification token + QR
++$pd = public_document_get_or_create('referral', (int)$r['id'], (string)$r['referral_no']);
++$verifyUrl = public_document_verify_url((string)$pd['token']);
++$qrImg = public_document_qr_image_url($verifyUrl, $settings);
+ $clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Praktek dr. Agus');
+ $clinicAddr = $settings['clinic_address'] ?? '';
+ $clinicSip  = $settings['clinic_sip'] ?? '';
+@@ -84,6 +90,19 @@
+     <div class="label2">Diagnosa / Alasan Rujuk</div>
+     <pre><?= e($r['diagnosis']) ?></pre>
+ 
++
++
++    <div style="margin-top:16px;display:flex;justify-content:space-between;gap:14px;align-items:flex-end;flex-wrap:wrap">
++      <div style="font-size:11px;max-width:560px">
++        <div style="font-weight:800">Verifikasi dokumen</div>
++        <div>Scan QR atau buka link berikut untuk verifikasi keaslian dokumen:</div>
++        <div style="word-break:break-all"><a href="<?= e($verifyUrl) ?>" target="_blank" rel="noopener"><?= e($verifyUrl) ?></a></div>
++      </div>
++      <div>
++        <img src="<?= e($qrImg) ?>" alt="QR Verifikasi" style="width:110px;height:110px">
++      </div>
++    </div>
++
+     <div class="sign">
+       <div class="signbox">
+         <?php if ($sig): ?><img src="<?= e(url($sig)) ?>" alt="Tanda tangan"><?php endif; ?>
+diff -ruN print_rx.php print_rx.php
+--- print_rx.php	2026-01-22 07:50:38.000000000 +0000
++++ print_rx.php	2026-01-24 04:30:17.953135233 +0000
+@@ -3,6 +3,7 @@
+ require_once __DIR__ . '/app/auth.php';
+ require_once __DIR__ . '/app/db.php';
+ require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
+ 
+ auth_require();
+ $u = auth_user();
+@@ -29,6 +30,11 @@
+   exit;
+ }
+ 
++
++// Public verification token + QR
++$pd = public_document_get_or_create('prescription', (int)$rx['id'], (string)$rx['rx_no']);
++$verifyUrl = public_document_verify_url((string)$pd['token']);
++$qrImg = public_document_qr_image_url($verifyUrl, $settings);
+ $clinicName = $settings['clinic_name'] ?? 'Praktek dr. Agus';
+ $clinicSip  = $settings['clinic_sip'] ?? '';
+ 
+@@ -142,6 +148,19 @@
+ <?= e($rx['content']) ?>
+     </div>
+ 
++
++
++    <div style="margin-top:16px;display:flex;justify-content:space-between;gap:14px;align-items:flex-end;flex-wrap:wrap">
++      <div style="font-size:11px;max-width:560px">
++        <div style="font-weight:800">Verifikasi dokumen</div>
++        <div>Scan QR atau buka link berikut untuk verifikasi keaslian dokumen:</div>
++        <div style="word-break:break-all"><a href="<?= e($verifyUrl) ?>" target="_blank" rel="noopener"><?= e($verifyUrl) ?></a></div>
++      </div>
++      <div>
++        <img src="<?= e($qrImg) ?>" alt="QR Verifikasi" style="width:110px;height:110px">
++      </div>
++    </div>
++
+     <div class="sign">
+       <?php if ($sig): ?>
+         <img src="<?= e(url($sig)) ?>" alt="TTD">
+diff -ruN print_sick_letter.php print_sick_letter.php
+--- print_sick_letter.php	2026-01-22 07:54:06.000000000 +0000
++++ print_sick_letter.php	2026-01-24 04:29:55.378841369 +0000
+@@ -1,110 +1,129 @@
+-<?php
+-require_once __DIR__ . '/app/bootstrap.php';
+-require_once __DIR__ . '/app/auth.php';
+-require_once __DIR__ . '/app/db.php';
+-require_once __DIR__ . '/app/controllers/common.php';
+-
+-auth_require();
+-$u = auth_user();
+-$settings = get_settings();
+-
+-$id = (int)($_GET['id'] ?? 0);
+-$st = db()->prepare("SELECT s.*, v.visit_no, v.visit_date,
+-                            p.mrn, p.full_name, p.dob, p.gender, p.address,
+-                            u.full_name AS doctor_name, u.signature_path AS doctor_signature_path
+-                     FROM sick_letters s
+-                     JOIN visits v ON v.id=s.visit_id
+-                     JOIN patients p ON p.id=s.patient_id
+-                     LEFT JOIN users u ON u.id=s.doctor_id
+-                     WHERE s.id=?");
+-$st->execute([$id]);
+-$s = $st->fetch();
+-if (!$s) { http_response_code(404); echo "Not found"; exit; }
+-
+-$clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Praktek dr. Agus');
+-$clinicAddr = $settings['clinic_address'] ?? '';
+-$clinicSip  = $settings['clinic_sip'] ?? '';
+-$logo = $settings['logo_path'] ?? '';
+-
+-$sig_global = $settings['signature_path'] ?? '';
+-$sig_doctor = $s['doctor_signature_path'] ?? '';
+-$sig = $sig_doctor ?: $sig_global;
+-
+-$age = age_from_dob($s['dob']);
+-$days = null;
+-try {
+-  $d1 = new DateTime($s['start_date']);
+-  $d2 = new DateTime($s['end_date']);
+-  $days = $d1->diff($d2)->days + 1;
+-} catch (Throwable $e) {
+-  $days = null;
+-}
+-?>
+-<!doctype html>
+-<html lang="id">
+-<head>
+-  <meta charset="utf-8">
+-  <meta name="viewport" content="width=device-width, initial-scale=1">
+-  <title>Surat Sakit - <?= e($s['letter_no']) ?></title>
+-  <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
+-  <style>
+-    body{background:#fff;color:#000}
+-    .paper{max-width:820px;margin:0 auto;padding:20px}
+-    .kop{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:12px}
+-    .kop img{width:64px;height:64px;object-fit:contain}
+-    .kop .t1{font-size:18px;font-weight:800}
+-    .kop .t2{font-size:12px;color:#333}
+-    .label2{font-size:12px;color:#333;font-weight:700;margin:10px 0 4px}
+-    pre{white-space:pre-wrap;font-family:inherit;margin:0}
+-    .sign{margin-top:24px;display:flex;justify-content:flex-end}
+-    .signbox{text-align:center}
+-    .signbox img{width:180px;height:auto}
+-  </style>
+-</head>
+-<body onload="window.print()">
+-  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/sick_letters.php')) ?>')" aria-label="Kembali">←</button>
+-  <div class="paper">
+-    <div class="kop">
+-      <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
+-      <div>
+-        <div class="t1"><?= e($clinicName) ?></div>
+-        <?php if ($clinicAddr): ?><div class="t2"><?= e($clinicAddr) ?></div><?php endif; ?>
+-        <?php if ($clinicSip): ?><div class="t2">SIP: <?= e($clinicSip) ?></div><?php endif; ?>
+-      </div>
+-    </div>
+-
+-    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+-      <div>Surat Sakit No: <b><?= e($s['letter_no']) ?></b></div>
+-      <div>Tanggal: <?= e($s['created_at']) ?></div>
+-    </div>
+-
+-    <div class="label2">Identitas Pasien</div>
+-    <div>MRN: <?= e($s['mrn']) ?> | Nama: <?= e($s['full_name']) ?> | Usia: <?= e((string)($age ?? '-')) ?> | JK: <?= e($s['gender']) ?></div>
+-    <div>Alamat: <?= e($s['address'] ?? '') ?></div>
+-    <div>No Kunjungan: <?= e($s['visit_no']) ?> | Tanggal Kunjungan: <?= e($s['visit_date']) ?></div>
+-
+-    <div class="label2">Keterangan</div>
+-    <div>Diberikan surat keterangan sakit untuk istirahat mulai tanggal <b><?= e($s['start_date']) ?></b>
+-      sampai tanggal <b><?= e($s['end_date']) ?></b>
+-      <?php if ($days !== null): ?>(<?= e((string)$days) ?> hari)<?php endif; ?>.</div>
+-
+-    <?php if (!empty($s['diagnosis'])): ?>
+-      <div class="label2">Diagnosa</div>
+-      <pre><?= e($s['diagnosis']) ?></pre>
+-    <?php endif; ?>
+-
+-    <?php if (!empty($s['notes'])): ?>
+-      <div class="label2">Catatan</div>
+-      <pre><?= e($s['notes']) ?></pre>
+-    <?php endif; ?>
+-
+-    <div class="sign">
+-      <div class="signbox">
+-        <?php if ($sig): ?><img src="<?= e(url($sig)) ?>" alt="Tanda tangan"><?php endif; ?>
+-        <div style="margin-top:6px"><?= e($s['doctor_name'] ?? $u['full_name']) ?></div>
+-      </div>
+-    </div>
+-  </div>
+-  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
+-</body>
+-</html>
++<?php
++require_once __DIR__ . '/app/bootstrap.php';
++require_once __DIR__ . '/app/auth.php';
++require_once __DIR__ . '/app/db.php';
++require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
++
++auth_require();
++$u = auth_user();
++$settings = get_settings();
++
++$id = (int)($_GET['id'] ?? 0);
++$st = db()->prepare("SELECT s.*, v.visit_no, v.visit_date,
++                            p.mrn, p.full_name, p.dob, p.gender, p.address,
++                            u.full_name AS doctor_name, u.signature_path AS doctor_signature_path
++                     FROM sick_letters s
++                     JOIN visits v ON v.id=s.visit_id
++                     JOIN patients p ON p.id=s.patient_id
++                     LEFT JOIN users u ON u.id=s.doctor_id
++                     WHERE s.id=?");
++$st->execute([$id]);
++$s = $st->fetch();
++if (!$s) { http_response_code(404); echo "Not found"; exit; }
++
++// Public verification token + QR
++$pd = public_document_get_or_create('sick_letter', (int)$s['id'], (string)$s['letter_no']);
++$verifyUrl = public_document_verify_url((string)$pd['token']);
++$qrImg = public_document_qr_image_url($verifyUrl, $settings);
++
++$clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Praktek dr. Agus');
++$clinicAddr = $settings['clinic_address'] ?? '';
++$clinicSip  = $settings['clinic_sip'] ?? '';
++$logo = $settings['logo_path'] ?? '';
++
++$sig_global = $settings['signature_path'] ?? '';
++$sig_doctor = $s['doctor_signature_path'] ?? '';
++$sig = $sig_doctor ?: $sig_global;
++
++$age = age_from_dob($s['dob']);
++$days = null;
++try {
++  $d1 = new DateTime($s['start_date']);
++  $d2 = new DateTime($s['end_date']);
++  $days = $d1->diff($d2)->days + 1;
++} catch (Throwable $e) {
++  $days = null;
++}
++?>
++<!doctype html>
++<html lang="id">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>Surat Sakit - <?= e($s['letter_no']) ?></title>
++  <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
++  <style>
++    body{background:#fff;color:#000}
++    .paper{max-width:820px;margin:0 auto;padding:20px}
++    .kop{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:12px}
++    .kop img{width:64px;height:64px;object-fit:contain}
++    .kop .t1{font-size:18px;font-weight:800}
++    .kop .t2{font-size:12px;color:#333}
++    .label2{font-size:12px;color:#333;font-weight:700;margin:10px 0 4px}
++    pre{white-space:pre-wrap;font-family:inherit;margin:0}
++    .sign{margin-top:24px;display:flex;justify-content:flex-end}
++    .signbox{text-align:center}
++    .signbox img{width:180px;height:auto}
++  </style>
++</head>
++<body onload="window.print()">
++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/sick_letters.php')) ?>')" aria-label="Kembali">←</button>
++  <div class="paper">
++    <div class="kop">
++      <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++      <div>
++        <div class="t1"><?= e($clinicName) ?></div>
++        <?php if ($clinicAddr): ?><div class="t2"><?= e($clinicAddr) ?></div><?php endif; ?>
++        <?php if ($clinicSip): ?><div class="t2">SIP: <?= e($clinicSip) ?></div><?php endif; ?>
++      </div>
++    </div>
++
++    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
++      <div>Surat Sakit No: <b><?= e($s['letter_no']) ?></b></div>
++      <div>Tanggal: <?= e($s['created_at']) ?></div>
++    </div>
++
++    <div class="label2">Identitas Pasien</div>
++    <div>MRN: <?= e($s['mrn']) ?> | Nama: <?= e($s['full_name']) ?> | Usia: <?= e((string)($age ?? '-')) ?> | JK: <?= e($s['gender']) ?></div>
++    <div>Alamat: <?= e($s['address'] ?? '') ?></div>
++    <div>No Kunjungan: <?= e($s['visit_no']) ?> | Tanggal Kunjungan: <?= e($s['visit_date']) ?></div>
++
++    <div class="label2">Keterangan</div>
++    <div>Diberikan surat keterangan sakit untuk istirahat mulai tanggal <b><?= e($s['start_date']) ?></b>
++      sampai tanggal <b><?= e($s['end_date']) ?></b>
++      <?php if ($days !== null): ?>(<?= e((string)$days) ?> hari)<?php endif; ?>.</div>
++
++    <?php if (!empty($s['diagnosis'])): ?>
++      <div class="label2">Diagnosa</div>
++      <pre><?= e($s['diagnosis']) ?></pre>
++    <?php endif; ?>
++
++    <?php if (!empty($s['notes'])): ?>
++      <div class="label2">Catatan</div>
++      <pre><?= e($s['notes']) ?></pre>
++    <?php endif; ?>
++
++
++
++    <div style="margin-top:16px;display:flex;justify-content:space-between;gap:14px;align-items:flex-end;flex-wrap:wrap">
++      <div style="font-size:11px;max-width:560px">
++        <div style="font-weight:800">Verifikasi dokumen</div>
++        <div>Scan QR atau buka link berikut untuk verifikasi keaslian dokumen:</div>
++        <div style="word-break:break-all"><a href="<?= e($verifyUrl) ?>" target="_blank" rel="noopener"><?= e($verifyUrl) ?></a></div>
++      </div>
++      <div>
++        <img src="<?= e($qrImg) ?>" alt="QR Verifikasi" style="width:110px;height:110px">
++      </div>
++    </div>
++
++    <div class="sign">
++      <div class="signbox">
++        <?php if ($sig): ?><img src="<?= e(url($sig)) ?>" alt="Tanda tangan"><?php endif; ?>
++        <div style="margin-top:6px"><?= e($s['doctor_name'] ?? $u['full_name']) ?></div>
++      </div>
++    </div>
++  </div>
++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++</body>
++</html>
+diff -ruN print_visit.php print_visit.php
+--- print_visit.php	2026-01-22 07:55:26.000000000 +0000
++++ print_visit.php	2026-01-24 04:31:02.479250040 +0000
+@@ -3,6 +3,7 @@
+ require_once __DIR__ . '/app/auth.php';
+ require_once __DIR__ . '/app/db.php';
+ require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
+ 
+ auth_require();
+ $u = auth_user();
+@@ -19,6 +20,11 @@
+ $v = $st->fetch();
+ if (!$v) { http_response_code(404); echo "Not found"; exit; }
+ 
++// Public verification token + QR
++$pd = public_document_get_or_create('visit_report', (int)$v['id'], (string)$v['visit_no']);
++$verifyUrl = public_document_verify_url((string)$pd['token']);
++$qrImg = public_document_qr_image_url($verifyUrl, $settings);
++
+ // USG images (opsional; tabel add-on)
+ $usgImages = [];
+ try {
+@@ -124,6 +130,19 @@
+       <pre><?= e($v['therapy'] ?? '') ?></pre>
+     </div>
+ 
++
++
++    <div style="margin-top:16px;display:flex;justify-content:space-between;gap:14px;align-items:flex-end;flex-wrap:wrap">
++      <div style="font-size:11px;max-width:560px">
++        <div style="font-weight:800">Verifikasi dokumen</div>
++        <div>Scan QR atau buka link berikut untuk verifikasi keaslian dokumen:</div>
++        <div style="word-break:break-all"><a href="<?= e($verifyUrl) ?>" target="_blank" rel="noopener"><?= e($verifyUrl) ?></a></div>
++      </div>
++      <div>
++        <img src="<?= e($qrImg) ?>" alt="QR Verifikasi" style="width:110px;height:110px">
++      </div>
++    </div>
++
+     <div class="sign">
+       <div class="signbox">
+         <div style="height:16px"></div>
+diff -ruN settings.php settings.php
+--- settings.php	2026-01-17 12:44:22.000000000 +0000
++++ settings.php	2026-01-24 04:31:39.916302853 +0000
+@@ -40,6 +40,17 @@
+   set_setting('custom_css', (string)($_POST['custom_css'] ?? ''));
+   set_setting('card_css', (string)($_POST['card_css'] ?? ''));
+ 
++  // QR verification settings (optional)
++  $qrProvider = trim((string)($_POST['qr_provider'] ?? 'qrserver'));
++  if (!in_array($qrProvider, ['qrserver','quickchart'], true)) $qrProvider = 'qrserver';
++  set_setting('qr_provider', $qrProvider);
++
++  $qrSize = (int)($_POST['qr_size'] ?? 180);
++  if ($qrSize < 60) $qrSize = 180;
++  if ($qrSize > 600) $qrSize = 600;
++  set_setting('qr_size', (string)$qrSize);
++
++
+   $logo = save_upload('logo', 'logo', ['png','jpg','jpeg','webp']);
+   if ($logo) set_setting('logo_path', $logo);
+ 
+@@ -115,6 +126,25 @@
+       <div class="label">Card CSS (Kartu Berobat - opsional)</div>
+       <textarea class="input" name="card_css" placeholder="CSS khusus kartu berobat..."><?= e($settings['card_css'] ?? '') ?></textarea>
+       <div class="muted" style="margin-top:6px">CSS ini hanya diterapkan pada halaman kartu berobat (KTP). Anda bisa ubah warna tema, font, dan layout tanpa edit file.</div>
++    <div class="col-12">
++      <div class="label">QR Verifikasi Dokumen (opsional)</div>
++      <div class="muted">QR akan dibuat dari link verifikasi publik. Jika internet kantor tidak stabil, Anda dapat mengganti provider.</div>
++    </div>
++
++    <div class="col-6">
++      <div class="label">QR Provider</div>
++      <select class="input" name="qr_provider">
++        <option value="qrserver" <?= (($settings['qr_provider'] ?? 'qrserver')==='qrserver') ? 'selected' : '' ?>>QRServer (api.qrserver.com)</option>
++        <option value="quickchart" <?= (($settings['qr_provider'] ?? 'qrserver')==='quickchart') ? 'selected' : '' ?>>QuickChart (quickchart.io)</option>
++      </select>
++    </div>
++
++    <div class="col-6">
++      <div class="label">QR Size (px)</div>
++      <input class="input" name="qr_size" value="<?= e($settings['qr_size'] ?? '180') ?>" placeholder="180">
++      <div class="muted" style="margin-top:6px">Rekomendasi 160–220 untuk hasil print.</div>
++    </div>
++
+     </div>
+ 
+ 
+diff -ruN verify.php verify.php
+--- verify.php	1970-01-01 00:00:00.000000000 +0000
++++ verify.php	2026-01-24 04:29:24.215309078 +0000
+@@ -0,0 +1,271 @@
++<?php
++require_once __DIR__ . '/app/bootstrap.php';
++require_once __DIR__ . '/app/db.php';
++require_once __DIR__ . '/app/controllers/common.php';
++require_once __DIR__ . '/app/public_documents.php';
++
++$settings = get_settings();
++
++$token = trim((string)($_GET['token'] ?? ''));
++if ($token === '' || !preg_match('/^[a-f0-9]{32}$/i', $token)) {
++  http_response_code(400);
++  echo "Token tidak valid.";
++  exit;
++}
++
++$st = db()->prepare("SELECT * FROM public_documents WHERE token=? LIMIT 1");
++$st->execute([$token]);
++$pd = $st->fetch();
++
++if (!$pd) {
++  http_response_code(404);
++  echo "Dokumen tidak ditemukan.";
++  exit;
++}
++
++public_document_log_access((int)$pd['id']);
++
++$docType = (string)$pd['doc_type'];
++$docId = (int)$pd['doc_id'];
++
++$doc = null;
++$title = 'Verifikasi Dokumen';
++
++function fmt_gender(string $g): string {
++  return $g === 'L' ? 'Laki-laki' : ($g === 'P' ? 'Perempuan' : $g);
++}
++
++try {
++  switch ($docType) {
++    case 'visit_report':
++      $q = "SELECT v.id, v.visit_no, v.visit_date,
++                   p.mrn, p.full_name, p.dob, p.gender,
++                   u.full_name AS doctor_name
++            FROM visits v
++            JOIN patients p ON p.id=v.patient_id
++            LEFT JOIN users u ON u.id=v.doctor_id
++            WHERE v.id=?";
++      $st2 = db()->prepare($q);
++      $st2->execute([$docId]);
++      $doc = $st2->fetch();
++      $title = 'Verifikasi Laporan Pemeriksaan';
++      break;
++
++    case 'sick_letter':
++      $q = "SELECT s.id, s.letter_no, s.created_at,
++                   s.start_date, s.end_date,
++                   p.mrn, p.full_name, p.dob, p.gender,
++                   u.full_name AS doctor_name
++            FROM sick_letters s
++            JOIN patients p ON p.id=s.patient_id
++            LEFT JOIN users u ON u.id=s.doctor_id
++            WHERE s.id=?";
++      $st2 = db()->prepare($q);
++      $st2->execute([$docId]);
++      $doc = $st2->fetch();
++      $title = 'Verifikasi Surat Sakit';
++      break;
++
++    case 'referral':
++      $q = "SELECT r.id, r.referral_no, r.created_at,
++                   r.referred_to_doctor, r.referred_to_specialty,
++                   p.mrn, p.full_name, p.dob, p.gender,
++                   u.full_name AS doctor_name
++            FROM referrals r
++            JOIN patients p ON p.id=r.patient_id
++            LEFT JOIN users u ON u.id=r.sender_doctor_id
++            WHERE r.id=?";
++      $st2 = db()->prepare($q);
++      $st2->execute([$docId]);
++      $doc = $st2->fetch();
++      $title = 'Verifikasi Surat Rujukan';
++      break;
++
++    case 'prescription':
++      $q = "SELECT x.id, x.rx_no, x.created_at,
++                   v.visit_no, v.visit_date,
++                   p.mrn, p.full_name, p.dob, p.gender,
++                   u.full_name AS doctor_name
++            FROM prescriptions x
++            JOIN visits v ON v.id=x.visit_id
++            JOIN patients p ON p.id=v.patient_id
++            LEFT JOIN users u ON u.id=v.doctor_id
++            WHERE x.id=?";
++      $st2 = db()->prepare($q);
++      $st2->execute([$docId]);
++      $doc = $st2->fetch();
++      $title = 'Verifikasi Resep';
++      break;
++
++    case 'consent':
++      $q = "SELECT c.id, c.consent_no, c.created_at, c.procedure_name,
++                   v.visit_no, v.visit_date,
++                   p.mrn, p.full_name, p.dob, p.gender,
++                   u.full_name AS doctor_name
++            FROM consents c
++            JOIN visits v ON v.id=c.visit_id
++            JOIN patients p ON p.id=v.patient_id
++            LEFT JOIN users u ON u.id=c.doctor_id
++            WHERE c.id=?";
++      $st2 = db()->prepare($q);
++      $st2->execute([$docId]);
++      $doc = $st2->fetch();
++      $title = 'Verifikasi Informed Consent';
++      break;
++  }
++} catch (Throwable $e) {
++  log_app('error', 'verify lookup failed', ['err'=>$e->getMessage(), 'doc_type'=>$docType, 'doc_id'=>$docId]);
++  $doc = null;
++}
++
++if (!$doc) {
++  http_response_code(404);
++  echo "Detail dokumen tidak ditemukan. (doc_type=" . e($docType) . ")";
++  exit;
++}
++
++$age = age_from_dob($doc['dob'] ?? null);
++$isRevoked = ((int)($pd['revoked'] ?? 0)) === 1;
++
++$clinicName = $settings['clinic_name'] ?? ($settings['brand_title'] ?? 'Adena Medical System');
++$brandBadge = $settings['brand_badge'] ?? 'Adena Medical System';
++
++?>
++<!doctype html>
++<html lang="id">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title><?= e($title) ?></title>
++  <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
++  <style>
++    body{background:#0b1220}
++    .wrap{max-width:820px;margin:0 auto;padding:18px}
++    .card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:16px}
++    .muted{color:#a5b4fc}
++    .k{color:#cbd5e1;font-size:12px}
++    .v{color:#e5e7eb;font-weight:700}
++    .grid{display:grid;grid-template-columns:1fr;gap:10px}
++    @media (min-width: 720px){ .grid{grid-template-columns:1fr 1fr} }
++    .badge{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800}
++    .ok{background:rgba(34,197,94,.18);border:1px solid rgba(34,197,94,.35);color:#bbf7d0}
++    .bad{background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.35);color:#fecaca}
++    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
++  </style>
++</head>
++<body>
++  <div class="wrap">
++    <div class="card">
++      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
++        <div>
++          <div style="font-size:18px;font-weight:900;color:#e5e7eb"><?= e($clinicName) ?></div>
++          <div class="muted" style="font-size:12px"><?= e($brandBadge) ?></div>
++        </div>
++        <div>
++          <?php if ($isRevoked): ?>
++            <span class="badge bad">TIDAK VALID (DICABUT)</span>
++          <?php else: ?>
++            <span class="badge ok">VALID</span>
++          <?php endif; ?>
++        </div>
++      </div>
++
++      <div style="margin-top:14px" class="grid">
++        <div>
++          <div class="k">Jenis dokumen</div>
++          <div class="v"><?= e($title) ?></div>
++        </div>
++        <div>
++          <div class="k">Token</div>
++          <div class="v mono"><?= e($token) ?></div>
++        </div>
++
++        <div>
++          <div class="k">Pasien</div>
++          <div class="v"><?= e($doc['full_name'] ?? '-') ?></div>
++          <div class="k"><?= e($doc['mrn'] ?? '-') ?> · <?= e((string)($age ?? '-')) ?> th · <?= e(fmt_gender((string)($doc['gender'] ?? ''))) ?></div>
++        </div>
++        <div>
++          <div class="k">Dokter</div>
++          <div class="v"><?= e($doc['doctor_name'] ?? '-') ?></div>
++        </div>
++
++        <?php if ($docType === 'visit_report'): ?>
++          <div>
++            <div class="k">No Kunjungan</div>
++            <div class="v"><?= e($doc['visit_no'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tanggal Kunjungan</div>
++            <div class="v"><?= e($doc['visit_date'] ?? '-') ?></div>
++          </div>
++        <?php endif; ?>
++
++        <?php if ($docType === 'sick_letter'): ?>
++          <div>
++            <div class="k">No Surat Sakit</div>
++            <div class="v"><?= e($doc['letter_no'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tanggal Terbit</div>
++            <div class="v"><?= e($doc['created_at'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Periode</div>
++            <div class="v"><?= e($doc['start_date'] ?? '-') ?> s/d <?= e($doc['end_date'] ?? '-') ?></div>
++          </div>
++        <?php endif; ?>
++
++        <?php if ($docType === 'referral'): ?>
++          <div>
++            <div class="k">No Rujukan</div>
++            <div class="v"><?= e($doc['referral_no'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tanggal Terbit</div>
++            <div class="v"><?= e($doc['created_at'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tujuan</div>
++            <div class="v"><?= e($doc['referred_to_doctor'] ?? '-') ?> (<?= e($doc['referred_to_specialty'] ?? '-') ?>)</div>
++          </div>
++        <?php endif; ?>
++
++        <?php if ($docType === 'prescription'): ?>
++          <div>
++            <div class="k">No Resep</div>
++            <div class="v"><?= e($doc['rx_no'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tanggal Terbit</div>
++            <div class="v"><?= e($doc['created_at'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">No Kunjungan</div>
++            <div class="v"><?= e($doc['visit_no'] ?? '-') ?> · <?= e($doc['visit_date'] ?? '-') ?></div>
++          </div>
++        <?php endif; ?>
++
++        <?php if ($docType === 'consent'): ?>
++          <div>
++            <div class="k">No Consent</div>
++            <div class="v"><?= e($doc['consent_no'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tindakan</div>
++            <div class="v"><?= e($doc['procedure_name'] ?? '-') ?></div>
++          </div>
++          <div>
++            <div class="k">Tanggal Terbit</div>
++            <div class="v"><?= e($doc['created_at'] ?? '-') ?></div>
++          </div>
++        <?php endif; ?>
++      </div>
++
++      <div style="margin-top:14px" class="k">
++        Catatan: status “Valid” berarti token verifikasi terdaftar pada sistem. Jika dokumen dicabut, status akan berubah menjadi “Tidak valid”.
++      </div>
++    </div>
++  </div>
++</body>
++</html>

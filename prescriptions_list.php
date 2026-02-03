@@ -1,0 +1,2 @@
+<?php
+// optional future expansion

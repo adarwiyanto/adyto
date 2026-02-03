@@ -1,0 +1,4 @@
+[2026-01-26 15:57:37] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-01-26 15:57:37] INFO  Login failed {"username":"adyto","ip":"36.78.80.14"}
+[2026-01-26 15:57:45] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-01-26 15:57:45] INFO  Login failed {"username":"adyto","ip":"36.78.80.14"}

@@ -1,0 +1,2 @@
+[2026-01-15 13:23:02] ERROR Uncaught exception {"message":"syntax error, unexpected token \":\"","file":"C:\\xampp\\htdocs\\AMS\\app\\views\\partials\\header.php","line":6}
+[2026-01-15 14:43:06] ERROR Uncaught exception {"message":"SQLSTATE[42S22]: Column not found: 1054 Unknown column 'updated_at' in 'field list'","file":"C:\\xampp\\htdocs\\AMS\\app\\db.php","line":29}

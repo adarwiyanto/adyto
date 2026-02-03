@@ -1,0 +1,296 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/patches/0001-Add-back-arrow-back-button-to-header-standalone-and-.patch b/patches/0001-Add-back-arrow-back-button-to-header-standalone-and-.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..46c6debe47973aabe9eeb8ce04cbb3415d07e406
+--- /dev/null
++++ b/patches/0001-Add-back-arrow-back-button-to-header-standalone-and-.patch
+@@ -0,0 +1,286 @@
++From ad8cda3191deeb3c5b4f35e243401c1fa64b8e93 Mon Sep 17 00:00:00 2001
++From: Codex <codex@openai.com>
++Date: Wed, 21 Jan 2026 23:40:56 +0000
++Subject: [PATCH] Add back-arrow/back button to header, standalone and print
++ pages
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++### Motivation
++- Make navigation easier by adding a visible back arrow that returns the user to the previous page or a sensible fallback URL when history is not available.
++
++### Description
++- Add a reusable `goBack` helper in `public/assets/js/app.js` that uses `window.history.back()` with an optional fallback URL.
++- Add shared styles `.topbar-left`, `.btn.back-button` and `.back-floating` in `public/assets/css/theme.css` to style inline and floating back controls.
++- Insert back arrow controls into the global header (`app/views/partials/header.php`) and add back buttons to standalone pages `login.php`, `install/index.php`, `patient_card.php`, `patient_card_pdf.php`, and the print pages `print_visit.php`, `print_rx.php`, `print_referral.php`, `print_consent.php`, and `print_sick_letter.php`, using `goBack()` with appropriate fallback URLs.
++- Include the app script where needed by adding `<script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>` to pages that previously didn’t load the helper script.
++
++### Testing
++- No automated tests were run.
++---
++ app/views/partials/header.php |  5 ++++-
++ install/index.php             |  2 ++
++ login.php                     |  2 ++
++ patient_card.php              |  3 ++-
++ patient_card_pdf.php          |  3 ++-
++ print_consent.php             | 10 ++++++----
++ print_referral.php            |  2 ++
++ print_rx.php                  |  3 +++
++ print_sick_letter.php         | 10 ++++++----
++ print_visit.php               |  2 ++
++ public/assets/css/theme.css   |  3 +++
++ public/assets/js/app.js       | 10 ++++++++++
++ 12 files changed, 44 insertions(+), 11 deletions(-)
++
++diff --git a/app/views/partials/header.php b/app/views/partials/header.php
++index b426a20..ca4315e 100644
++--- a/app/views/partials/header.php
+++++ b/app/views/partials/header.php
++@@ -56,7 +56,10 @@ $u = $u ?? null;
++ 
++   <main class="main">
++     <header class="topbar no-print">
++-      <button class="btn small" type="button" onclick="toggleSidebar()">☰</button>
+++      <div class="topbar-left">
+++        <button class="btn small back-button" type="button" onclick="goBack('<?= e(url('/index.php')) ?>')" aria-label="Kembali">←</button>
+++        <button class="btn small" type="button" onclick="toggleSidebar()">☰</button>
+++      </div>
++       <div class="topbar-title"><?= e($brand_title) ?></div>
++       <div class="topbar-user"><?= $u ? e($u['full_name']).' ('.e($u['role']).')' : '' ?></div>
++     </header>
++diff --git a/install/index.php b/install/index.php
++index d5a6bc9..f3a85f3 100644
++--- a/install/index.php
+++++ b/install/index.php
++@@ -134,6 +134,7 @@ if ($step === 1 && $_SERVER['REQUEST_METHOD'] === 'POST') {
++   <link rel="stylesheet" href="../public/assets/css/theme.css">
++ </head>
++ <body>
+++  <button class="btn back-button back-floating" type="button" onclick="goBack('../index.php')" aria-label="Kembali">←</button>
++   <div class="container">
++     <div class="card">
++       <div class="h1">Install Adena Medical System (AMS)</div>
++@@ -205,5 +206,6 @@ if ($step === 1 && $_SERVER['REQUEST_METHOD'] === 'POST') {
++       </div>
++     </div>
++   </div>
+++  <script src="../public/assets/js/app.js"></script>
++ </body>
++ </html>
++diff --git a/login.php b/login.php
++index c67d48d..b074e57 100644
++--- a/login.php
+++++ b/login.php
++@@ -35,6 +35,7 @@ if (is_post()) {
++   <link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
++ </head>
++ <body>
+++  <button class="btn back-button back-floating" type="button" onclick="goBack('<?= e(url('/index.php')) ?>')" aria-label="Kembali">←</button>
++   <div class="container" style="max-width:520px">
++     <div class="card">
++       <div class="h1">Login</div>
++@@ -62,5 +63,6 @@ if (is_post()) {
++       <div class="muted" style="margin-top:10px">Jika ada error, jangan panik: log dulu, baru panik terukur.</div>
++     </div>
++   </div>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/patient_card.php b/patient_card.php
++index ac57f7d..56ca2ea 100644
++--- a/patient_card.php
+++++ b/patient_card.php
++@@ -75,7 +75,7 @@ $auto = (int)($_GET['auto'] ?? 0);
++ <body <?= $auto ? 'onload="window.print()"' : '' ?>>
++ 
++   <div class="noprint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
++-    <a class="btn secondary" href="<?= e(url('/patients.php')) ?>">Kembali</a>
+++    <button class="btn back-button" type="button" onclick="goBack('<?= e(url('/patients.php')) ?>')" aria-label="Kembali">← Kembali</button>
++     <button class="btn" onclick="window.print()">Cetak</button>
++     <div class="muted">Tips: di dialog print pilih "Actual size" / "100%" agar ukuran KTP pas.</div>
++   </div>
++@@ -117,5 +117,6 @@ $auto = (int)($_GET['auto'] ?? 0);
++     </div>
++   </div>
++ 
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/patient_card_pdf.php b/patient_card_pdf.php
++index 530907c..e7b6403 100644
++--- a/patient_card_pdf.php
+++++ b/patient_card_pdf.php
++@@ -122,7 +122,7 @@ $auto = (int)($_GET['autoprint'] ?? 0);
++ <body <?= $auto ? 'onload="window.print()"' : '' ?>>
++   <div class="topbar">
++     <button class="btn" onclick="window.print()">Cetak / Simpan PDF</button>
++-    <a class="btn secondary" href="<?= e(url('/patients.php')) ?>">Kembali</a>
+++    <button class="btn back-button" type="button" onclick="goBack('<?= e(url('/patients.php')) ?>')" aria-label="Kembali">← Kembali</button>
++   </div>
++ 
++   <div class="wrap">
++@@ -184,5 +184,6 @@ $auto = (int)($_GET['autoprint'] ?? 0);
++       </div>
++     </div>
++   </div>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/print_consent.php b/print_consent.php
++index 04c8b50..44103c6 100644
++--- a/print_consent.php
+++++ b/print_consent.php
++@@ -55,8 +55,9 @@ $signerName = $c['signer_name'] ?: ($c['full_name'] ?? '');
++     .signbox img{width:180px;height:auto}
++   </style>
++ </head>
++-<body onload="window.print()">
++-  <div class="paper">
+++<body onload="window.print()">
+++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/consents.php')) ?>')" aria-label="Kembali">←</button>
+++  <div class="paper">
++     <div class="kop">
++       <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++       <div>
++@@ -123,5 +124,6 @@ $signerName = $c['signer_name'] ?: ($c['full_name'] ?? '');
++       </div>
++     </div>
++   </div>
++-</body>
++-</html>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
+++</body>
+++</html>
++diff --git a/print_referral.php b/print_referral.php
++index 2ac990f..2599816 100644
++--- a/print_referral.php
+++++ b/print_referral.php
++@@ -55,6 +55,7 @@ $age = age_from_dob($r['dob']);
++   </style>
++ </head>
++ <body onload="window.print()">
+++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/referrals.php')) ?>')" aria-label="Kembali">←</button>
++   <div class="paper">
++     <div class="kop">
++       <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++@@ -91,5 +92,6 @@ $age = age_from_dob($r['dob']);
++       </div>
++     </div>
++   </div>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/print_rx.php b/print_rx.php
++index 112c39c..71b4fd0 100644
++--- a/print_rx.php
+++++ b/print_rx.php
++@@ -44,6 +44,7 @@ $age = age_from_dob($rx['dob']);
++ <head>
++ <meta charset="utf-8">
++ <title>Resep <?= e($rx['rx_no']) ?></title>
+++<link rel="stylesheet" href="<?= e(url('/public/assets/css/theme.css')) ?>">
++ 
++ <style>
++ /* ====== SET UKURAN KERTAS RESEP ====== */
++@@ -119,6 +120,7 @@ body {
++ </head>
++ 
++ <body onload="window.print()">
+++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/prescriptions.php')) ?>')" aria-label="Kembali">←</button>
++   <div class="paper">
++ 
++     <div class="header">
++@@ -150,5 +152,6 @@ body {
++     </div>
++ 
++   </div>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/print_sick_letter.php b/print_sick_letter.php
++index 4519fdf..fab786c 100644
++--- a/print_sick_letter.php
+++++ b/print_sick_letter.php
++@@ -61,8 +61,9 @@ try {
++     .signbox img{width:180px;height:auto}
++   </style>
++ </head>
++-<body onload="window.print()">
++-  <div class="paper">
+++<body onload="window.print()">
+++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/sick_letters.php')) ?>')" aria-label="Kembali">←</button>
+++  <div class="paper">
++     <div class="kop">
++       <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++       <div>
++@@ -104,5 +105,6 @@ try {
++       </div>
++     </div>
++   </div>
++-</body>
++-</html>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
+++</body>
+++</html>
++diff --git a/print_visit.php b/print_visit.php
++index a938a91..14b14e1 100644
++--- a/print_visit.php
+++++ b/print_visit.php
++@@ -72,6 +72,7 @@ $age = age_from_dob($v['dob']);
++   </style>
++ </head>
++ <body onload="window.print()">
+++  <button class="btn back-button back-floating no-print" type="button" onclick="goBack('<?= e(url('/visits.php')) ?>')" aria-label="Kembali">←</button>
++   <div class="paper">
++     <div class="kop">
++       <?php if ($logo): ?><img src="<?= e(url($logo)) ?>" alt="Logo"><?php endif; ?>
++@@ -131,5 +132,6 @@ $age = age_from_dob($v['dob']);
++       </div>
++     </div>
++   </div>
+++  <script src="<?= e(url('/public/assets/js/app.js')) ?>"></script>
++ </body>
++ </html>
++diff --git a/public/assets/css/theme.css b/public/assets/css/theme.css
++index 39cca4f..4e21ba3 100644
++--- a/public/assets/css/theme.css
+++++ b/public/assets/css/theme.css
++@@ -28,6 +28,7 @@ a{color:inherit;text-decoration:none}
++ .side-footer{padding:10px;border-top:1px solid var(--line)}
++ .main{flex:1}
++ .topbar{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(15,23,42,.88);backdrop-filter: blur(6px);position:sticky;top:0;z-index:10}
+++.topbar-left{display:flex;align-items:center;gap:8px}
++ .topbar-title{font-weight:700}
++ .topbar-user{color:var(--muted);font-size:13px}
++ 
++@@ -56,6 +57,8 @@ textarea{min-height:110px;resize:vertical}
++ .btn.secondary{background:rgba(255,255,255,.06);color:var(--text)}
++ .btn.danger{background:rgba(239,68,68,.9)}
++ .btn.small{padding:8px 10px;border-radius:10px;font-size:12px}
+++.btn.back-button{border-radius:999px;padding:8px 10px;background:rgba(255,255,255,.06);color:var(--text)}
+++.back-floating{position:fixed;top:12px;left:12px;z-index:30}
++ .table{width:100%;border-collapse:collapse}
++ .table th,.table td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:14px}
++ .table th{color:var(--muted);font-weight:600}
++diff --git a/public/assets/js/app.js b/public/assets/js/app.js
++index 7da7c37..a6d135b 100644
++--- a/public/assets/js/app.js
+++++ b/public/assets/js/app.js
++@@ -3,3 +3,13 @@ function toggleSidebar(){
++   if(!el) return;
++   el.classList.toggle('hidden');
++ }
+++
+++function goBack(defaultUrl){
+++  if(window.history.length > 1){
+++    window.history.back();
+++    return;
+++  }
+++  if(defaultUrl){
+++    window.location.href = defaultUrl;
+++  }
+++}
++-- 
++2.43.0
++
+ 
+EOF
+)

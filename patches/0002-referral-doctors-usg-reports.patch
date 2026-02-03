@@ -1,0 +1,325 @@
+diff -ruN /mnt/data/ams_proj/.htaccess /mnt/data/ams_patch_v12/workdir/.htaccess
+--- /mnt/data/ams_proj/.htaccess	2026-01-15 11:59:00.000000000 +0000
++++ /mnt/data/ams_patch_v12/workdir/.htaccess	1970-01-01 00:00:00.000000000 +0000
+@@ -1,2 +0,0 @@
+-# Optional: security for storage/logs
+-# Jika mod_rewrite aktif, Anda bisa menambah aturan untuk blok akses direct ke file tertentu.
+diff -ruN /mnt/data/ams_proj/app/views/partials/header.php /mnt/data/ams_patch_v12/workdir/app/views/partials/header.php
+--- /mnt/data/ams_proj/app/views/partials/header.php	2026-01-22 07:34:38.000000000 +0000
++++ /mnt/data/ams_patch_v12/workdir/app/views/partials/header.php	2026-01-24 03:21:44.907143228 +0000
+@@ -33,6 +33,7 @@
+       <a href="<?= e(url('/index.php')) ?>">Dashboard</a>
+       <a href="<?= e(url('/patients.php')) ?>">Pasien</a>
+       <a href="<?= e(url('/visits.php')) ?>">Kunjungan</a>
++      <a href="<?= e(url('/reports_exams.php')) ?>">Rekapan Pemeriksaan</a>
+       <a href="<?= e(url('/prescriptions.php')) ?>">Resep</a>
+       <a href="<?= e(url('/referrals.php')) ?>">Rujukan</a>
+       <a href="<?= e(url('/sick_letters.php')) ?>">Surat Sakit</a>
+@@ -41,6 +42,7 @@
+         <div class="nav-sep">Admin</div>
+         <a href="<?= e(url('/users.php')) ?>">User & Role</a>
+         <a href="<?= e(url('/settings.php')) ?>">Kop Surat & Theme</a>
++        <a href="<?= e(url('/referral_doctors.php')) ?>">Dokter Perujuk</a>
+         <a href="<?= e(url('/backup.php')) ?>">Backup DB</a>
+         <a href="<?= e(url('/logs.php')) ?>">Log</a>
+       <?php endif; ?>
+diff -ruN /mnt/data/ams_proj/migrations/005_add_referral_doctors_and_exam_classification.sql /mnt/data/ams_patch_v12/workdir/migrations/005_add_referral_doctors_and_exam_classification.sql
+--- /mnt/data/ams_proj/migrations/005_add_referral_doctors_and_exam_classification.sql	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ams_patch_v12/workdir/migrations/005_add_referral_doctors_and_exam_classification.sql	2026-01-24 03:18:33.907074959 +0000
+@@ -0,0 +1,37 @@
++-- AMS Migration 005: Dokter Perujuk + Klasifikasi Pemeriksaan (USG) + Rekapan
++-- Aman untuk data lama: hanya menambah tabel/kolom; data lama dibiarkan.
++
++START TRANSACTION;
++
++-- 1) Master daftar dokter perujuk (diisi dari halaman setting)
++CREATE TABLE IF NOT EXISTS referral_doctors (
++  id INT AUTO_INCREMENT PRIMARY KEY,
++  name VARCHAR(120) NOT NULL,
++  is_active TINYINT(1) NOT NULL DEFAULT 1,
++  created_at DATETIME NOT NULL,
++  updated_at DATETIME NULL,
++  UNIQUE KEY uq_referral_doctors_name (name),
++  INDEX (is_active)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
++
++-- 2) Tambahan ke tabel visits: dokter perujuk + flag USG + tipe USG
++ALTER TABLE visits
++  ADD COLUMN referral_doctor_id INT NULL AFTER doctor_id,
++  ADD COLUMN is_usg TINYINT(1) NOT NULL DEFAULT 0 AFTER referral_doctor_id,
++  ADD COLUMN usg_type ENUM('diagnostic','interventional') NULL AFTER is_usg;
++
++ALTER TABLE visits
++  ADD INDEX idx_visits_referral_doctor_id (referral_doctor_id),
++  ADD INDEX idx_visits_is_usg (is_usg),
++  ADD INDEX idx_visits_usg_type (usg_type);
++
++-- 3) Backfill untuk data lama: jika usg_report terisi, anggap sebagai USG diagnostik
++UPDATE visits
++SET is_usg = 1
++WHERE usg_report IS NOT NULL AND TRIM(usg_report) <> '';
++
++UPDATE visits
++SET usg_type = 'diagnostic'
++WHERE is_usg = 1 AND usg_type IS NULL;
++
++COMMIT;
+diff -ruN /mnt/data/ams_proj/referral_doctors.php /mnt/data/ams_patch_v12/workdir/referral_doctors.php
+--- /mnt/data/ams_proj/referral_doctors.php	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ams_patch_v12/workdir/referral_doctors.php	2026-01-24 03:20:38.937805022 +0000
+@@ -0,0 +1,124 @@
++<?php
++require_once __DIR__ . '/app/bootstrap.php';
++require_once __DIR__ . '/app/auth.php';
++require_once __DIR__ . '/app/db.php';
++require_once __DIR__ . '/app/controllers/common.php';
++
++// Admin-only (master data)
++auth_require_role(['admin']);
++$u = auth_user();
++$settings = get_settings();
++
++csrf_validate();
++
++if (is_post()) {
++  $action = (string)($_POST['action'] ?? '');
++
++  try {
++    if ($action === 'add') {
++      $name = trim((string)($_POST['name'] ?? ''));
++      if ($name === '') {
++        flash_set('err', 'Nama dokter perujuk wajib diisi.');
++        redirect('/referral_doctors.php');
++      }
++
++      // Jika nama sudah ada, aktifkan kembali (tidak bikin duplikasi)
++      $stmt = db()->prepare("INSERT INTO referral_doctors(name, is_active, created_at, updated_at) VALUES(?, 1, ?, NULL)
++        ON DUPLICATE KEY UPDATE is_active=1, updated_at=VALUES(created_at)");
++      $stmt->execute([$name, now_dt()]);
++
++      flash_set('ok', 'Dokter perujuk tersimpan.');
++      redirect('/referral_doctors.php');
++    }
++
++    if ($action === 'toggle') {
++      $id = (int)($_POST['id'] ?? 0);
++      $to = (int)($_POST['to'] ?? 0);
++      if ($id <= 0) {
++        flash_set('err', 'ID tidak valid.');
++        redirect('/referral_doctors.php');
++      }
++      db_exec('UPDATE referral_doctors SET is_active=?, updated_at=? WHERE id=?', [$to ? 1 : 0, now_dt(), $id]);
++      flash_set('ok', 'Status dokter perujuk diperbarui.');
++      redirect('/referral_doctors.php');
++    }
++
++    flash_set('err', 'Aksi tidak dikenal.');
++    redirect('/referral_doctors.php');
++  } catch (Throwable $e) {
++    log_app('error', 'Referral doctors action failed', ['err'=>$e->getMessage()]);
++    flash_set('err', 'Gagal menyimpan. Cek log.');
++    redirect('/referral_doctors.php');
++  }
++}
++
++$rows = db()->query('SELECT id, name, is_active, created_at, updated_at FROM referral_doctors ORDER BY is_active DESC, name ASC')->fetchAll();
++
++$title = 'Dokter Perujuk';
++require __DIR__ . '/app/views/partials/header.php';
++?>
++
++<div class="card">
++  <div class="h1">Dokter Perujuk</div>
++  <div class="muted">Daftar ini akan muncul sebagai pilihan (dropdown) pada halaman pemeriksaan/kunjungan untuk kolom dokter perujuk.</div>
++</div>
++
++<div class="card">
++  <form method="post" class="grid" autocomplete="off">
++    <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
++    <input type="hidden" name="action" value="add">
++
++    <div class="col-8">
++      <div class="label">Nama Dokter Perujuk</div>
++      <input class="input" name="name" placeholder="Contoh: dr. Amir Yusuf" required>
++    </div>
++
++    <div class="col-4" style="display:flex;align-items:end">
++      <button class="btn" type="submit">Tambah</button>
++    </div>
++  </form>
++</div>
++
++<div class="card">
++  <div class="h2" style="margin-bottom:12px">Daftar</div>
++
++  <?php if (!$rows): ?>
++    <div class="muted">Belum ada data.</div>
++  <?php else: ?>
++    <table class="table">
++      <thead>
++        <tr>
++          <th>Nama</th>
++          <th>Status</th>
++          <th>Dibuat</th>
++          <th style="width:160px">Aksi</th>
++        </tr>
++      </thead>
++      <tbody>
++        <?php foreach ($rows as $r): ?>
++          <tr>
++            <td><?= e($r['name']) ?></td>
++            <td><?= (int)$r['is_active'] === 1 ? 'Aktif' : 'Nonaktif' ?></td>
++            <td><?= e($r['created_at'] ?? '') ?></td>
++            <td>
++              <form method="post" style="display:flex;gap:8px;align-items:center">
++                <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
++                <input type="hidden" name="action" value="toggle">
++                <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
++                <?php if ((int)$r['is_active'] === 1): ?>
++                  <input type="hidden" name="to" value="0">
++                  <button class="btn secondary small" type="submit">Nonaktifkan</button>
++                <?php else: ?>
++                  <input type="hidden" name="to" value="1">
++                  <button class="btn small" type="submit">Aktifkan</button>
++                <?php endif; ?>
++              </form>
++            </td>
++          </tr>
++        <?php endforeach; ?>
++      </tbody>
++    </table>
++  <?php endif; ?>
++</div>
++
++<?php require __DIR__ . '/app/views/partials/footer.php'; ?>
+diff -ruN /mnt/data/ams_proj/reports_exams.php /mnt/data/ams_patch_v12/workdir/reports_exams.php
+--- /mnt/data/ams_proj/reports_exams.php	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ams_patch_v12/workdir/reports_exams.php	2026-01-24 03:21:14.603840627 +0000
+@@ -0,0 +1,127 @@
++<?php
++require_once __DIR__ . '/app/bootstrap.php';
++require_once __DIR__ . '/app/auth.php';
++require_once __DIR__ . '/app/db.php';
++require_once __DIR__ . '/app/controllers/common.php';
++
++auth_require();
++$u = auth_user();
++$settings = get_settings();
++
++// Filters
++$month = trim((string)($_GET['month'] ?? '')); // format: YYYY-MM
++$year = trim((string)($_GET['year'] ?? ''));   // format: YYYY
++
++// Default: bulan berjalan / tahun berjalan
++$now = new DateTime();
++if ($month === '') $month = $now->format('Y-m');
++if ($year === '') $year = $now->format('Y');
++
++function month_range(string $ym): array {
++  // $ym: YYYY-MM
++  $start = DateTime::createFromFormat('Y-m-d H:i:s', $ym . '-01 00:00:00');
++  if (!$start) $start = new DateTime('first day of this month 00:00:00');
++  $end = (clone $start)->modify('first day of next month 00:00:00');
++  return [$start->format('Y-m-d H:i:s'), $end->format('Y-m-d H:i:s')];
++}
++
++function year_range(string $y): array {
++  $start = DateTime::createFromFormat('Y-m-d H:i:s', $y . '-01-01 00:00:00');
++  if (!$start) $start = new DateTime('first day of January this year 00:00:00');
++  $end = (clone $start)->modify('+1 year');
++  return [$start->format('Y-m-d H:i:s'), $end->format('Y-m-d H:i:s')];
++}
++
++[$mStart, $mEnd] = month_range($month);
++[$yStart, $yEnd] = year_range($year);
++
++function fetch_summary(string $start, string $end): array {
++  $sql = "
++    SELECT
++      COUNT(*) AS total,
++      SUM(CASE WHEN is_usg=0 OR is_usg IS NULL THEN 1 ELSE 0 END) AS biasa,
++      SUM(CASE WHEN is_usg=1 AND usg_type='diagnostic' THEN 1 ELSE 0 END) AS usg_diagnostik,
++      SUM(CASE WHEN is_usg=1 AND usg_type='interventional' THEN 1 ELSE 0 END) AS usg_intervensi
++    FROM visits
++    WHERE visit_date >= ? AND visit_date < ?
++  ";
++  $st = db()->prepare($sql);
++  $st->execute([$start, $end]);
++  $r = $st->fetch() ?: [];
++  return [
++    'total' => (int)($r['total'] ?? 0),
++    'biasa' => (int)($r['biasa'] ?? 0),
++    'usg_diagnostik' => (int)($r['usg_diagnostik'] ?? 0),
++    'usg_intervensi' => (int)($r['usg_intervensi'] ?? 0),
++  ];
++}
++
++$sumMonth = fetch_summary($mStart, $mEnd);
++$sumYear  = fetch_summary($yStart, $yEnd);
++
++$title = 'Rekapan Pemeriksaan';
++require __DIR__ . '/app/views/partials/header.php';
++?>
++
++<div class="card">
++  <div class="h1">Rekapan Pemeriksaan</div>
++  <div class="muted">Ringkasan jumlah pemeriksaan per kategori: Pemeriksaan biasa, USG diagnostik, dan USG intervensi.</div>
++</div>
++
++<div class="card">
++  <form method="get" class="grid" autocomplete="off">
++    <div class="col-6">
++      <div class="label">Rekap Bulanan</div>
++      <input class="input" type="month" name="month" value="<?= e($month) ?>">
++    </div>
++
++    <div class="col-6">
++      <div class="label">Rekap Tahunan</div>
++      <input class="input" type="number" name="year" min="2000" max="2100" value="<?= e($year) ?>">
++    </div>
++
++    <div class="col-12" style="display:flex;gap:8px;justify-content:flex-end">
++      <button class="btn" type="submit">Tampilkan</button>
++    </div>
++  </form>
++</div>
++
++<div class="card">
++  <div class="h2" style="margin-bottom:12px">Ringkasan Bulan <?= e($month) ?></div>
++  <table class="table">
++    <thead>
++      <tr>
++        <th>Kategori</th>
++        <th style="width:120px">Jumlah</th>
++      </tr>
++    </thead>
++    <tbody>
++      <tr><td>Total</td><td><?= (int)$sumMonth['total'] ?></td></tr>
++      <tr><td>Pemeriksaan biasa</td><td><?= (int)$sumMonth['biasa'] ?></td></tr>
++      <tr><td>USG diagnostik</td><td><?= (int)$sumMonth['usg_diagnostik'] ?></td></tr>
++      <tr><td>USG intervensi</td><td><?= (int)$sumMonth['usg_intervensi'] ?></td></tr>
++    </tbody>
++  </table>
++  <div class="muted" style="margin-top:8px">Periode: <?= e($mStart) ?> s/d &lt; <?= e($mEnd) ?></div>
++</div>
++
++<div class="card">
++  <div class="h2" style="margin-bottom:12px">Ringkasan Tahun <?= e($year) ?></div>
++  <table class="table">
++    <thead>
++      <tr>
++        <th>Kategori</th>
++        <th style="width:120px">Jumlah</th>
++      </tr>
++    </thead>
++    <tbody>
++      <tr><td>Total</td><td><?= (int)$sumYear['total'] ?></td></tr>
++      <tr><td>Pemeriksaan biasa</td><td><?= (int)$sumYear['biasa'] ?></td></tr>
++      <tr><td>USG diagnostik</td><td><?= (int)$sumYear['usg_diagnostik'] ?></td></tr>
++      <tr><td>USG intervensi</td><td><?= (int)$sumYear['usg_intervensi'] ?></td></tr>
++    </tbody>
++  </table>
++  <div class="muted" style="margin-top:8px">Periode: <?= e($yStart) ?> s/d &lt; <?= e($yEnd) ?></div>
++</div>
++
++<?php require __DIR__ . '/app/views/partials/footer.php'; ?>

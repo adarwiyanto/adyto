@@ -1,0 +1,39 @@
+# ===== Security basics =====
+Options -Indexes
+ServerSignature Off
+
+# Protect hidden files (except .well-known for SSL challenges)
+<FilesMatch "^\.(?!well-known)">
+  Require all denied
+</FilesMatch>
+
+# Block access to sensitive file types (adjust if you need some of these)
+<FilesMatch "(?i)\.(env|ini|log|bak|old|sql|sh|zip|tar|gz|tgz|rar|7z|yml|yaml|json|lock|dist)$">
+  Require all denied
+</FilesMatch>
+
+# ===== Rewrite engine =====
+RewriteEngine On
+
+# 1) Force HTTPS (works on most Apache setups)
+RewriteCond %{HTTPS} !=on [OR]
+RewriteCond %{HTTP:X-Forwarded-Proto} !https
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# 2) Remove index.php from URL (redirect if someone accesses it)
+RewriteCond %{THE_REQUEST} \s/+index\.php[\s?] [NC]
+RewriteRule ^index\.php$ / [R=301,L]
+
+# 3) Pretty URL routing:
+# If request is NOT an existing file or folder,
+# try same path with .php; otherwise fallback to index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI}.php -f
+RewriteRule ^(.+?)/?$ $1.php [L]
+
+# Fallback to index.php for apps that route via index.php (optional)
+# Uncomment if your app expects /anything handled by index.php
+# RewriteCond %{REQUEST_FILENAME} !-f
+# RewriteCond %{REQUEST_FILENAME} !-d
+# RewriteRule ^ index.php [L]

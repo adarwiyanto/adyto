@@ -1,0 +1,2 @@
+[2026-02-01 14:22:41] ERROR PHP error {"severity":2,"message":"mkdir(): File exists","file":"/home/adey8293/public_html/ams/app/helpers.php","line":49}
+[2026-02-01 14:22:41] INFO  Login failed {"username":"adyto","ip":"180.254.162.236"}
