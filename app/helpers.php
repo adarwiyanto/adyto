@@ -35,7 +35,7 @@ function redirect(string $path): void {
 
 function ensure_dirs(): void {
   $cfg = config();
-  foreach (['paths.logs','paths.backups','uploads.logo_dir','uploads.signature_dir'] as $k) {
+  foreach (['paths.logs','paths.backups','uploads.logo_dir','uploads.signature_dir','uploads.dicom_dir'] as $k) {
     $parts = explode('.', $k);
     $v = $cfg;
     foreach ($parts as $p) $v = $v[$p] ?? null;

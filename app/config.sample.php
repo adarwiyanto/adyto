@@ -22,6 +22,8 @@ return [
   'uploads' => [
     'logo_dir' => __DIR__ . '/../storage/uploads/logo',
     'signature_dir' => __DIR__ . '/../storage/uploads/signature',
+    'dicom_dir' => __DIR__ . '/../storage/uploads/dicom',
+    'dicom_max_upload_mb' => 100,
   ],
 
   'paths' => [

@@ -1,0 +1,18 @@
+.dicom-layout{display:grid;grid-template-columns:320px 1fr;gap:12px;min-height:560px}
+.dicom-sidebar-panel,.dicom-viewport-panel{background:#fff;border:1px solid #dde3ea;border-radius:12px;padding:12px}
+.dicom-sidebar-panel{overflow:auto}
+.dicom-list .study-item{padding:8px;border:1px solid #e7ebf0;border-radius:8px;margin-bottom:8px}
+.dicom-list .series-item{margin:6px 0 0 10px;padding:6px;border-left:2px solid #dde3ea;cursor:pointer}
+.dicom-list .series-item:hover,.dicom-list .series-item.active{background:#f3f6ff}
+.dicom-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.dicom-controls button{padding:8px;border:1px solid #c7d1e0;background:#f9fbff;border-radius:8px;cursor:pointer}
+.dicom-controls button.active{background:#dce7ff;border-color:#9cb6f0}
+.dicom-viewport-panel{position:relative;display:flex;flex-direction:column}
+.dicom-viewport{flex:1;min-height:440px;background:#000;border-radius:8px;position:relative;overflow:hidden}
+.dicom-overlay{position:absolute;left:18px;top:18px;color:#8ef0b7;background:rgba(0,0,0,.6);padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.4;pointer-events:none;white-space:pre-line;max-width:52ch}
+.dicom-slice-control{display:flex;align-items:center;gap:10px;padding-top:10px}
+.dicom-slice-control input{flex:1}
+@media (max-width: 960px){
+  .dicom-layout{grid-template-columns:1fr}
+  .dicom-sidebar-panel{max-height:260px}
+}

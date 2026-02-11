@@ -68,6 +68,7 @@ require __DIR__ . '/app/views/partials/header.php';
     <div class="col-12" style="display:flex;gap:8px;flex-wrap:wrap">
       <a class="btn secondary" href="<?= e(url('/patient_edit.php?id='.(int)$p['id'])) ?>">Edit</a>
       <a class="btn secondary" href="<?= e(url('/visits.php?patient_id='.(int)$p['id'])) ?>">Kunjungan</a>
+      <a class="btn secondary" href="<?= e(url('/dicom_viewer.php?patient_id='.(int)$p['id'])) ?>">Imaging (DICOM)</a>
       <a class="btn secondary" href="<?= e(url('/patient_card_pdf.php?id='.(int)$p['id'])) ?>" target="_blank" rel="noopener">Kartu (PDF)</a>
     </div>
   </div>

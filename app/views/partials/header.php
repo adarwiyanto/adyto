@@ -37,6 +37,7 @@ $u = $u ?? null;
       <a href="<?= e(url('/referrals.php')) ?>">Rujukan</a>
       <a href="<?= e(url('/sick_letters.php')) ?>">Surat Sakit</a>
       <a href="<?= e(url('/consents.php')) ?>">Informed Consent</a>
+      <a href="<?= e(url('/dicom_viewer.php')) ?>">DICOM Viewer</a>
       <?php if ($u && $u['role'] === 'admin'): ?>
         <div class="nav-sep">Admin</div>
         <a href="<?= e(url('/users.php')) ?>">User & Role</a>
