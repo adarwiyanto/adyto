@@ -48,12 +48,18 @@ function dicom_parse_tags(string $path): array {
     'series_description' => null,
     'instance_number' => null,
     'patient_name' => null,
+    'patient_id' => null,
+    'patient_birth_date' => null,
+    'patient_sex' => null,
     'window_center' => null,
     'window_width' => null,
   ];
 
   $targetTags = [
     '00100010' => 'patient_name',
+    '00100020' => 'patient_id',
+    '00100030' => 'patient_birth_date',
+    '00100040' => 'patient_sex',
     '00080020' => 'study_date',
     '00080060' => 'modality',
     '00081030' => 'study_description',
@@ -105,6 +111,20 @@ function dicom_parse_tags(string $path): array {
         $result[$field] = is_numeric($value) ? (int)$value : null;
       } else {
         $result[$field] = $value !== '' ? $value : null;
+      }
+
+      if ($field === 'patient_birth_date' && $result[$field]) {
+        $rawDob = preg_replace('/[^0-9]/', '', (string)$result[$field]);
+        if (preg_match('/^(\d{4})(\d{2})(\d{2})$/', $rawDob, $m)) {
+          $result[$field] = $m[1] . '-' . $m[2] . '-' . $m[3];
+        } else {
+          $result[$field] = null;
+        }
+      }
+
+      if ($field === 'patient_sex' && $result[$field]) {
+        $sx = strtoupper(substr((string)$result[$field], 0, 1));
+        $result[$field] = ($sx === 'M') ? 'L' : (($sx === 'F') ? 'P' : null);
       }
     }
 

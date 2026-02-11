@@ -9,6 +9,7 @@
   const labelEl = document.getElementById('dicom-slice-label');
   const overlayEl = document.getElementById('dicom-overlay');
   const uploadForm = document.getElementById('dicom-upload-form');
+  const expertiseForm = document.getElementById('dicom-expertise-form');
 
   let currentImageIds = [];
   let currentIndex = 0;
@@ -39,6 +40,18 @@
 
   function fetchJson(params){
     return fetch(cfg.apiUrl + '?' + qs(params), {credentials: 'same-origin'}).then(r => r.json());
+  }
+
+
+  async function saveExpertise(){
+    if (!expertiseForm) return;
+    const fd = new FormData(expertiseForm);
+    fd.append('action', 'save_expertise');
+    fd.append('patient_id', String(cfg.patientId));
+    const res = await fetch(cfg.apiUrl, {method: 'POST', body: fd, credentials: 'same-origin'});
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan ekspertise');
+    return json;
   }
 
   function setActiveTool(name){
@@ -155,6 +168,18 @@
   app.querySelectorAll('[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => setActiveTool(btn.dataset.tool));
   });
+
+  if (expertiseForm) {
+    expertiseForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await saveExpertise();
+        alert('Ekspertise tersimpan dan disinkronkan ke pemeriksaan pasien.');
+      } catch (err) {
+        alert(err.message || 'Gagal menyimpan ekspertise');
+      }
+    });
+  }
 
   if (uploadForm) {
     uploadForm.addEventListener('submit', async (e) => {

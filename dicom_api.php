@@ -41,6 +41,49 @@ function dicom_instance_patient_and_path(int $instanceId): ?array {
   return ['patient_id' => (int)$row['patient_id'], 'file_path' => $row['file_path'], 'file_size' => (int)$row['file_size']];
 }
 
+
+function dicom_normalize_name(?string $name): string {
+  $name = trim((string)$name);
+  if ($name === '') return '';
+  $name = str_replace('^', ' ', $name);
+  $name = preg_replace('/\s+/', ' ', $name);
+  return trim((string)$name);
+}
+
+function dicom_sync_patient_from_meta(int $patientId, array $meta): void {
+  if ($patientId <= 0) return;
+  $name = dicom_normalize_name($meta['patient_name'] ?? null);
+  $dob = trim((string)($meta['patient_birth_date'] ?? ''));
+  $gender = trim((string)($meta['patient_sex'] ?? ''));
+
+  $sets = [];
+  $vals = [];
+  if ($name !== '') {
+    $sets[] = 'full_name=?';
+    $vals[] = $name;
+  }
+  if ($dob !== '') {
+    $sets[] = 'dob=?';
+    $vals[] = $dob;
+  }
+  if (in_array($gender, ['L','P'], true)) {
+    $sets[] = 'gender=?';
+    $vals[] = $gender;
+  }
+
+  if (!$sets) return;
+  $vals[] = $patientId;
+  $sql = 'UPDATE patients SET ' . implode(',', $sets) . ' WHERE id=?';
+  db()->prepare($sql)->execute($vals);
+}
+
+function dicom_latest_visit_id(int $patientId): ?int {
+  $st = db()->prepare('SELECT id FROM visits WHERE patient_id=? ORDER BY visit_date DESC, id DESC LIMIT 1');
+  $st->execute([$patientId]);
+  $row = $st->fetch();
+  return $row ? (int)$row['id'] : null;
+}
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 if ($action === 'upload_study' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -88,6 +131,7 @@ if ($action === 'upload_study' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   try {
     $studyMap = [];
     $seriesMap = [];
+    $syncMeta = null;
 
     for ($i = 0; $i < $zip->numFiles; $i++) {
       $stat = $zip->statIndex($i);
@@ -114,6 +158,9 @@ if ($action === 'upload_study' && $_SERVER['REQUEST_METHOD'] === 'POST') {
       }
 
       $meta = dicom_parse_tags($dest);
+      if ($syncMeta === null && (!empty($meta['patient_name']) || !empty($meta['patient_birth_date']) || !empty($meta['patient_sex']))) {
+        $syncMeta = $meta;
+      }
       $studyUid = $meta['study_uid'] ?: 'STUDY_' . sha1((string)$patientId . '|' . $token);
       $seriesUid = $meta['series_uid'] ?: 'SERIES_' . sha1($studyUid . '|' . basename($dest));
       $sopUid = $meta['sop_instance_uid'] ?: 'SOP_' . sha1($seriesUid . '|' . basename($dest) . '|' . microtime(true));
@@ -177,6 +224,10 @@ if ($action === 'upload_study' && $_SERVER['REQUEST_METHOD'] === 'POST') {
       dicom_json(['ok' => false, 'error' => 'Tidak ada file DICOM valid di ZIP'], 400);
     }
 
+    if (is_array($syncMeta)) {
+      dicom_sync_patient_from_meta($patientId, $syncMeta);
+    }
+
     dicom_json(['ok' => true, 'message' => 'Upload berhasil', 'inserted' => $inserted]);
   } catch (Throwable $e) {
     $zip->close();
@@ -184,6 +235,19 @@ if ($action === 'upload_study' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     log_app('error', 'Upload DICOM gagal', ['error' => $e->getMessage()]);
     dicom_json(['ok' => false, 'error' => 'Upload gagal diproses'], 500);
   }
+}
+
+if ($action === 'save_expertise' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+  csrf_validate();
+  $patientId = (int)($_POST['patient_id'] ?? 0);
+  if ($patientId <= 0 || !dicom_patient_exists($patientId)) dicom_json(['ok' => false, 'error' => 'Patient tidak ditemukan'], 404);
+
+  $expertise = trim((string)($_POST['expertise'] ?? ''));
+  $visitId = dicom_latest_visit_id($patientId);
+  if (!$visitId) dicom_json(['ok' => false, 'error' => 'Belum ada data pemeriksaan pasien'], 400);
+
+  db()->prepare('UPDATE visits SET usg_report=? WHERE id=?')->execute([$expertise, $visitId]);
+  dicom_json(['ok' => true, 'message' => 'Ekspertise tersimpan']);
 }
 
 if ($action === 'list_studies') {
