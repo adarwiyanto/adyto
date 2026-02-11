@@ -21,6 +21,24 @@ if ($patientId > 0) {
   }
 }
 
+$todayPatients = db()->query("
+  SELECT DISTINCT p.id, p.mrn, p.full_name, p.gender, p.dob, MAX(v.visit_date) AS last_visit_date
+  FROM visits v
+  JOIN patients p ON p.id=v.patient_id
+  WHERE DATE(v.visit_date)=CURDATE()
+  GROUP BY p.id, p.mrn, p.full_name, p.gender, p.dob
+  ORDER BY last_visit_date DESC
+  LIMIT 200
+")->fetchAll();
+
+$expertiseValue = '';
+if ($patient) {
+  $st = db()->prepare('SELECT usg_report FROM visits WHERE patient_id=? ORDER BY visit_date DESC, id DESC LIMIT 1');
+  $st->execute([(int)$patient['id']]);
+  $row = $st->fetch();
+  $expertiseValue = trim((string)($row['usg_report'] ?? ''));
+}
+
 $title = 'DICOM Viewer';
 require __DIR__ . '/app/views/partials/header.php';
 ?>
@@ -33,7 +51,7 @@ require __DIR__ . '/app/views/partials/header.php';
       <?php if ($patient): ?>
         <div class="muted">Pasien: <strong><?= e($patient['full_name']) ?></strong> (MRN <?= e($patient['mrn']) ?>)</div>
       <?php else: ?>
-        <div class="muted">Pilih pasien dari halaman detail pasien untuk membuka imaging.</div>
+        <div class="muted">Pilih pasien dari daftar pemeriksaan hari ini untuk membuka imaging dan upload DICOM.</div>
       <?php endif; ?>
     </div>
     <?php if ($patient): ?>
@@ -49,8 +67,49 @@ require __DIR__ . '/app/views/partials/header.php';
   </div>
 </div>
 
+<?php if (!$patient): ?>
+  <div class="card">
+    <div class="h1" style="font-size:16px">Daftar Pasien Pemeriksaan Hari Ini</div>
+    <?php if (!$todayPatients): ?>
+      <div class="muted">Belum ada data pemeriksaan hari ini.</div>
+    <?php else: ?>
+      <table class="table">
+        <thead>
+          <tr><th>MRN</th><th>Nama</th><th>JK</th><th>Tgl Lahir</th><th>Visit</th><th>Aksi</th></tr>
+        </thead>
+        <tbody>
+          <?php foreach ($todayPatients as $tp): ?>
+            <tr>
+              <td><?= e($tp['mrn']) ?></td>
+              <td><?= e($tp['full_name']) ?></td>
+              <td><?= e($tp['gender']) ?></td>
+              <td><?= e($tp['dob'] ?: '-') ?></td>
+              <td><?= e($tp['last_visit_date']) ?></td>
+              <td>
+                <a class="btn small secondary" href="<?= e(url('/dicom_viewer.php?patient_id=' . (int)$tp['id'])) ?>">Buka DICOM</a>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+<?php endif; ?>
+
 <?php if ($patient): ?>
 <div id="dicom-app" class="dicom-layout" data-patient-id="<?= (int)$patient['id'] ?>">
+  <section class="dicom-sidebar-panel dicom-expertise-panel">
+    <h3>Ekspertise</h3>
+    <div class="muted" style="margin-bottom:8px">Catatan ini otomatis disinkronkan ke pemeriksaan pasien (kolom laporan USG).</div>
+    <form id="dicom-expertise-form" class="dicom-expertise-form">
+      <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
+      <textarea class="input" id="dicom-expertise" name="expertise" rows="12" placeholder="Tulis hasil ekspertise..."><?= e($expertiseValue) ?></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px">
+        <button type="submit" class="btn">Simpan Ekspertise</button>
+      </div>
+    </form>
+  </section>
+
   <section class="dicom-sidebar-panel">
     <h3>Study & Series</h3>
     <div id="dicom-study-list" class="dicom-list"></div>
